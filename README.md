@@ -1,3 +1,31 @@
+# VIctory on an RTX 4090 Laptop GPU
+
+A fork of [avatarmanz/VIctory-7900XTX](https://github.com/avatarmanz/VIctory-7900XTX)
+for a laptop with an NVIDIA GeForce RTX 4090 Laptop GPU (16 GB), an Intel
+integrated GPU beside it, and 32 GB of RAM. What it adds (2026-11-26):
+
+- **The device is made on the high-performance GPU.** Upstream made it on the
+  system's first adapter, which on a laptop with two is often the Intel one
+  that drives the screen (no mesh shaders, a fraction of the speed).
+  `VICTORY_GPU=default`: the first adapter, as before; `VICTORY_GPU=<n>`: the
+  n-th in order of performance.
+- **Wide indirect dispatches on NVIDIA, opt-in** (`scripts\play.ps1
+  -WideIndirect`, `VICTORY_INDIRECT_WIDE=force`): dispatches past 65,535 groups
+  run whole, as on AMD, instead of losing the lowest tiles of the picture.
+  The test `indirect::tests::card_runs_wide_indirect_dispatches` passes on the
+  RTX 4090 Laptop GPU (up to 2^20 groups, every group once) with
+  `VICTORY_INDIRECT_WIDE=force`; not yet tried in a whole session, so it stays
+  off unless asked for.
+- **Idle command lists let go when the PC is short of memory**: below
+  `VICTORY_LOW_MEMORY_MB` free (3072 unless set; 0: never) idle host lists and
+  their allocators are released instead of kept, before Windows starts paging.
+  With memory to spare nothing changes. `VICTORY_LIST_IDLE` sets how many are
+  kept idle (512).
+
+Nothing else is changed: what follows is upstream's description.
+
+---
+
 # VIctory on an RX 7900 XTX
 
 A fork of [VIctory](https://github.com/Marvisak/VIctory), a compatibility layer

@@ -885,7 +885,10 @@ fn create() -> windows::core::Result<Host> {
             D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?;
             tracing::info!("host device on the software adapter (WARP)");
         } else {
-            D3D12CreateDevice(None, D3D_FEATURE_LEVEL_12_0, &mut device)?;
+            match fast_adapter() {
+                Some(adapter) => D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?,
+                None => D3D12CreateDevice(None, D3D_FEATURE_LEVEL_12_0, &mut device)?,
+            }
             // Whether a GPU hang ends the run or freezes the PC (#1054).
             crate::tdr::log();
         }
@@ -977,6 +980,41 @@ impl Host {
         let adapter = self.adapter.as_ref();
         // SAFETY: a plain query.
         adapter.map_or(0, |a| unsafe { a.CheckInterfaceSupport(&IDXGIDevice::IID) }.unwrap_or(0))
+    }
+}
+
+/// The graphics card the host device is made on: the system's
+/// high-performance one, not its first adapter. On a laptop with two
+/// (Intel integrated and NVIDIA, as an RTX 4090 Laptop GPU is), the first
+/// adapter is often the integrated one that drives the screen, and the
+/// device was made there: no mesh shaders, a fraction of the speed.
+/// `VICTORY_GPU=default`: the first adapter, as before. `VICTORY_GPU=<n>`:
+/// the n-th adapter in the order of high performance (0 is the fastest).
+/// `None` when the order cannot be asked for (before Windows 10 1803) or
+/// the adapter is the software one, and then the first adapter is used.
+pub(crate) fn fast_adapter() -> Option<IDXGIAdapter1> {
+    let setting = std::env::var("VICTORY_GPU").ok();
+    if setting.as_deref() == Some("default") {
+        return None;
+    }
+    let index = setting.as_deref().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+    // SAFETY: plain DXGI adapter queries.
+    unsafe {
+        let factory: IDXGIFactory6 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).ok()?;
+        let adapter: IDXGIAdapter1 =
+            factory.EnumAdapterByGpuPreference(index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE).ok()?;
+        let desc = adapter.GetDesc1().ok()?;
+        if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+            return None;
+        }
+        let name = String::from_utf16_lossy(&desc.Description);
+        tracing::info!(
+            adapter = name.trim_end_matches('\0'),
+            vendor = format_args!("{:#x}", desc.VendorId),
+            card_mb = desc.DedicatedVideoMemory >> 20,
+            "host device on the high-performance adapter (VICTORY_GPU)"
+        );
+        Some(adapter)
     }
 }
 

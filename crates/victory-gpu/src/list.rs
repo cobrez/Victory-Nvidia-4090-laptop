@@ -234,6 +234,54 @@ static IDLE: std::sync::Mutex<(Vec<Idle>, u64)> = std::sync::Mutex::new((Vec::ne
 #[cfg(windows)]
 const IDLE_MOST: (usize, u64) = (512, 256 << 20);
 
+/// The most host lists kept idle: [`IDLE_MOST`] unless `VICTORY_LIST_IDLE`
+/// names another count (each idle list keeps two command allocators, and a
+/// D3D12 allocator keeps all the memory it ever grew to until it is
+/// released: the 9 GB of "lists' allocators" in docs/findings.md).
+#[cfg(windows)]
+fn idle_most() -> usize {
+    static MOST: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MOST.get_or_init(|| {
+        std::env::var("VICTORY_LIST_IDLE")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map_or(IDLE_MOST.0, |n| n.min(4096))
+    })
+}
+
+/// Whether the PC is short of physical memory: less free than
+/// `VICTORY_LOW_MEMORY_MB` (3072 unless set; 0: never). Asked at most every
+/// quarter of a second. While it is, idle host lists are let go instead of
+/// kept, so that their allocators' memory goes back before Windows starts
+/// paging the title out (on a PC with 32 GB the process's 40-46 GB are
+/// already more than there is). Nothing is let go while memory is
+/// plentiful, so frames are as before then.
+#[cfg(windows)]
+pub(crate) fn memory_short() -> bool {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static LIMIT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    static ASKED: AtomicU64 = AtomicU64::new(0);
+    static SHORT: AtomicBool = AtomicBool::new(false);
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let limit = *LIMIT.get_or_init(|| {
+        std::env::var("VICTORY_LOW_MEMORY_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(3072) << 20
+    });
+    if limit == 0 {
+        return false;
+    }
+    let now = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1;
+    let asked = ASKED.load(Ordering::Relaxed);
+    if now.saturating_sub(asked) >= 250
+        && ASKED.compare_exchange(asked, now, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+    {
+        let short = crate::host::available_physical_ram().is_some_and(|free| free < limit);
+        if short != SHORT.swap(short, Ordering::Relaxed) {
+            tracing::info!(short, limit_mb = limit >> 20, "PC memory short (VICTORY_LOW_MEMORY_MB): idle host lists let go while it is");
+        }
+    }
+    SHORT.load(Ordering::Relaxed)
+}
+
 /// Whether host lists that have run are used again (on by default;
 /// `VICTORY_LIST_POOL=0`: each is made new and thrown away, as before).
 #[cfg(windows)]
@@ -269,11 +317,26 @@ pub(crate) fn recycle(lists: Vec<Detached>, ran: &[usize]) {
     if !pools() {
         return;
     }
+    // Short of memory: the lists of this submission go, and half of those
+    // kept idle with them (let go outside the lock), down to a floor of 32
+    // so that the next frame still finds some.
+    let short = memory_short();
+    if short {
+        let surplus: Vec<Idle> = {
+            let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
+            let keep = (idle.0.len() / 2).max(32.min(idle.0.len()));
+            let gone = idle.0.split_off(keep);
+            idle.1 -= gone.iter().map(|Idle(_, bytes)| bytes).sum::<u64>();
+            gone
+        };
+        drop(surplus);
+    }
+    let most = if short { 32.min(idle_most()) } else { idle_most() };
     for (i, Detached { host, _uploads, _state }) in lists.into_iter().enumerate() {
         // The descriptor slots and the upload memory its commands named.
         drop(_state);
         drop(_uploads);
-        if !ran.contains(&i) || IDLE.lock().unwrap_or_else(|e| e.into_inner()).0.len() >= IDLE_MOST.0 {
+        if !ran.contains(&i) || IDLE.lock().unwrap_or_else(|e| e.into_inner()).0.len() >= most {
             continue;
         }
         // As the title's reset does: what the list kept for its commands
@@ -281,7 +344,7 @@ pub(crate) fn recycle(lists: Vec<Detached>, ran: &[usize]) {
         host.reset();
         let bytes = host.scratch_kept();
         let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
-        if idle.0.len() < IDLE_MOST.0 && idle.1 + bytes <= IDLE_MOST.1 {
+        if idle.0.len() < most && idle.1 + bytes <= IDLE_MOST.1 {
             idle.0.push(Idle(host, bytes));
             idle.1 += bytes;
         }

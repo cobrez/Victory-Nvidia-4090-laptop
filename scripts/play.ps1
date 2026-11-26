@@ -4,11 +4,16 @@
 # -RayTracing   the title's own ray-traced indirect light: lit interiors, about a third slower
 # -Build        target\diag (the default, the build all measurements are of) or target\release
 # -More         other settings: -More @{VICTORY_PANEL='1'}
+# -WideIndirect NVIDIA: indirect dispatches past 65,535 groups as on AMD (no blocky patches at the
+#               bottom of the picture). Off by default: only for a card the wide-dispatch test passed on.
+# The device is made on the high-performance GPU (the NVIDIA card of a laptop, not the Intel one);
+# -More @{VICTORY_GPU='default'} goes back to the first adapter.
 # Run it from a normal window, not as administrator: the driver then keeps its shader cache elsewhere.
 param(
     [Parameter(Mandatory)][string]$Exe,
     [switch]$Safe,
     [switch]$RayTracing,
+    [switch]$WideIndirect,
     [ValidateSet('diag', 'release')][string]$Build = 'diag',
     [hashtable]$More = @{}
 )
@@ -24,6 +29,7 @@ if ($Safe) {
     $settings.VICTORY_THIN = '1'; $settings.VICTORY_JOIN_PARTS = '8'; $settings.VICTORY_UPLOAD_AHEAD = '1'
 }
 if ($RayTracing) { $settings.VICTORY_BVH_BUILDER = '1' }
+if ($WideIndirect) { $settings.VICTORY_INDIRECT_WIDE = 'force' }
 foreach ($k in $More.Keys) { $settings[$k] = $More[$k] }
 
 $victory = Join-Path $PSScriptRoot "..\target\$Build\victory.exe"

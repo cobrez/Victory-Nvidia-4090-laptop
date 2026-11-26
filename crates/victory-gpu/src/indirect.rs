@@ -275,10 +275,31 @@ fn make_for(device: &ID3D12Device) -> windows::core::Result<Clamp> {
 /// its last 1,905 tiles, the lowest of the picture. The console runs what it
 /// is asked (its dispatch counts are 32 bits), and so does an AMD card, whose
 /// dispatch packets and group numbers are the same; D3D12 does not look at
-/// indirect counts. Other cards stay at 65,535.
+/// indirect counts. Other cards stay at 65,535, unless
+/// `VICTORY_INDIRECT_WIDE=force`: an experiment for NVIDIA cards, whose
+/// compute grids take far more than 65,535 groups in x natively (CUDA's
+/// limit is 2^31-1). Not measured: if the device is lost or the picture
+/// breaks with it, leave it out. Without it the lowest tiles of the
+/// picture are lost at 1440p (the blocky patches of docs/findings.md).
 fn widest(amd: bool) -> u32 {
-    let on = std::env::var_os("VICTORY_INDIRECT_WIDE").is_none_or(|v| v != "0");
-    if amd && on { 1 << 20 } else { 65_535 }
+    let setting = std::env::var("VICTORY_INDIRECT_WIDE").ok();
+    let force = setting.as_deref() == Some("force");
+    let on = setting.as_deref() != Some("0");
+    if (amd && on) || force { 1 << 20 } else { 65_535 }
+}
+
+/// The name of the card `device` is made on (empty when not known).
+#[cfg(test)]
+fn adapter_name(device: &ID3D12Device) -> String {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter1, IDXGIFactory4};
+    // SAFETY: plain queries.
+    unsafe {
+        CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0))
+            .and_then(|f| f.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
+            .and_then(|a| a.GetDesc1())
+            .map(|d| String::from_utf16_lossy(&d.Description).trim_end_matches('\0').to_owned())
+            .unwrap_or_default()
+    }
 }
 
 /// Whether `device` is an AMD card's.
@@ -690,7 +711,12 @@ void main() {
                 let adapter: IDXGIAdapter = if software {
                     factory.EnumWarpAdapter().ok()?
                 } else {
-                    factory.EnumAdapters(0).ok()?
+                    // The card the host device is made on (the fast one of
+                    // a laptop's two), else the first adapter.
+                    match crate::host::fast_adapter() {
+                        Some(fast) => fast.cast().ok()?,
+                        None => factory.EnumAdapters(0).ok()?,
+                    }
                 };
                 let desc = adapter.cast::<IDXGIAdapter1>().ok()?.GetDesc1().ok()?;
                 if software != (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0) {
@@ -2981,9 +3007,13 @@ void main(uint3 group : SV_GroupID, uint3 thread : SV_DispatchThreadID) {
         let Some(mut gpu) = WarpHarness::on(false) else {
             return;
         };
-        if !amd(&gpu.device) || widest(true) == 65_535 {
+        // (`VICTORY_INDIRECT_WIDE=force`: asked of any card, to see whether
+        // it runs them, as an NVIDIA card would have to.)
+        let forced = std::env::var("VICTORY_INDIRECT_WIDE").is_ok_and(|v| v == "force");
+        if !(amd(&gpu.device) || forced) || widest(true) == 65_535 {
             return;
         }
+        eprintln!("wide indirect dispatches asked of {}", adapter_name(&gpu.device));
         let worker = compile_cs(&gpu.device, CS).expect("the worker must compile");
         let pass = make_from(&gpu.device, batch::SOURCE).expect("the batched clamp must compile");
         let sig = gpu.signature(2, 12);
