@@ -6,6 +6,13 @@
 # -More         other settings: -More @{VICTORY_PANEL='1'}
 # -WideIndirect NVIDIA: indirect dispatches past 65,535 groups as on AMD (no blocky patches at the
 #               bottom of the picture). Off by default: only for a card the wide-dispatch test passed on.
+# -Exact        what the card writes and what the title copies reach the right submission: results
+#               fetched while the next flight is at the same bytes are put right (VICTORY_FETCH_CHECK=1),
+#               and every title buffer's copy has a side on the card (VICTORY_CARD_ALL=1), so a
+#               submission in the air never reads a later one's bytes. Without them 3 of the relay
+#               tests fail (host::upcheck, VICTORY_RELAY=2 VICTORY_RELAY_COPY=1); with them all pass on
+#               an RTX 4090 Laptop GPU. Cost not yet measured in a session: some CPU time on the
+#               landing threads (3-4 ms over 96 MB, upstream's estimate) and more card memory.
 # The device is made on the high-performance GPU (the NVIDIA card of a laptop, not the Intel one);
 # -More @{VICTORY_GPU='default'} goes back to the first adapter.
 # Run it from a normal window, not as administrator: the driver then keeps its shader cache elsewhere.
@@ -14,6 +21,7 @@ param(
     [switch]$Safe,
     [switch]$RayTracing,
     [switch]$WideIndirect,
+    [switch]$Exact,
     [ValidateSet('diag', 'release')][string]$Build = 'diag',
     [hashtable]$More = @{}
 )
@@ -30,6 +38,7 @@ if ($Safe) {
 }
 if ($RayTracing) { $settings.VICTORY_BVH_BUILDER = '1' }
 if ($WideIndirect) { $settings.VICTORY_INDIRECT_WIDE = 'force' }
+if ($Exact) { $settings.VICTORY_FETCH_CHECK = '1'; $settings.VICTORY_CARD_ALL = '1' }
 foreach ($k in $More.Keys) { $settings[$k] = $More[$k] }
 
 $victory = Join-Path $PSScriptRoot "..\target\$Build\victory.exe"

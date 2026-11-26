@@ -752,7 +752,7 @@ mod tests {
     /// what it found. Without `VICTORY_FETCH_CHECK` title memory keeps what
     /// was in between, and the next refresh of the 64 KiB sends it up.
     #[test]
-    #[ignore = "wants VICTORY_RELAY=2 VICTORY_RELAY_COPY=1 and a process of its own"]
+    #[ignore = "wants VICTORY_RELAY=2 VICTORY_RELAY_COPY=1 VICTORY_FETCH_CHECK=1 and a process of its own"]
     fn a_result_caught_in_between_is_put_right() {
         let Some(host) = host() else {
             return;
@@ -948,8 +948,12 @@ mod tests {
         each_reads_its_own(LEN, 0x7777, true);
     }
 
+    /// Fails without `VICTORY_CARD_ALL=1` (seen on an RTX 4090 Laptop GPU):
+    /// a copy with one side in the PC's memory is written by later
+    /// submissions' preparing while earlier ones are in the air
+    /// (`crate::shadow::card_all`), and two of the three read the third's.
     #[test]
-    #[ignore = "wants VICTORY_RELAY=2 VICTORY_RELAY_COPY=1 and a process of its own"]
+    #[ignore = "wants VICTORY_RELAY=2 VICTORY_RELAY_COPY=1 VICTORY_CARD_ALL=1 and a process of its own"]
     fn each_submission_reads_its_own_copy_in_pc_memory() {
         each_reads_its_own(256 << 10, 0x8888, std::env::var_os("VICTORY_CARD_ALL").is_some_and(|v| v == "1"));
     }

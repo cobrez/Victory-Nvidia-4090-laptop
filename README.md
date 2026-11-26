@@ -21,6 +21,31 @@ integrated GPU beside it, and 32 GB of RAM. What it adds (2026-11-26):
   their allocators are released instead of kept, before Windows starts paging.
   With memory to spare nothing changes. `VICTORY_LIST_IDLE` sets how many are
   kept idle (512).
+- **`scripts\play.ps1 -Exact`** (`VICTORY_FETCH_CHECK=1 VICTORY_CARD_ALL=1`):
+  what the card writes and what the title copies reach the right submission.
+  Opt-in until its cost is measured in a session.
+
+### The test suite on the RTX 4090 Laptop GPU (2026-11-26)
+
+`cargo test --workspace --locked --profile diag -- --test-threads=1`: 915
+passed, 0 failed (the system's default adapter was the RTX 4090 here). Tests
+for the RDNA-only shader forms skip themselves on NVIDIA, as they should.
+
+The ignored relay tests (`host::upcheck`, `host::card_steps`), run one by one
+with `VICTORY_RELAY=2 VICTORY_RELAY_COPY=1` as `play.ps1` sets them, 5 runs each:
+
+| Test | As upstream's play.ps1 | With `-Exact` |
+|---|---|---|
+| `a_result_caught_in_between_is_put_right` | fails (12 of 12 results wrong in title memory) | passes (`FETCH_CHECK`) |
+| `each_submission_reads_its_own_copy_in_pc_memory` | fails (2 of 3 submissions read the third's bytes) | passes (`CARD_ALL`) |
+| the other 7 | pass | pass |
+
+`writes_through_picked_views_come_back` fails too, but it is about
+`VICTORY_PICKED_WRITES`, which `play.ps1` does not set.
+`resource::tests::buffer_data_reaches_the_host_texture` fails when the whole
+of `play.ps1`'s settings are set together (no single one does it), on an
+assertion about who holds the host texture, not on its bytes: the test was
+not written for those settings.
 
 Nothing else is changed: what follows is upstream's description.
 
